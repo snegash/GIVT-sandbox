@@ -1388,16 +1388,7 @@ function ReputationAgent({ S }) {
   // verifications keyed by skill name: { "Python": [{role, confidence}], ... }
   const verifs = S.reputation?.verifs || {};
   const setVerifs = (v) => S.setReputation({ ...(S.reputation || {}), verifs: v });
-
-  const verifySkill = (skill) => {
-    const existing = verifs[skill] || [];
-    if (existing.some((e) => e.role === role)) return; // one verification per role per skill
-    const updated = { ...verifs, [skill]: [...existing, { role, confidence }] };
-    setVerifs(updated);
-    S.setStudentTokens((s) => s + STUDENT_TOKENS_PER_SKILL);
-    S.addVerifierPoints(role, VERIFIER_POINTS_PER_SKILL);
-    alert("Skill verified successfully. Reputation score updated.");
-    const verifySkill = (skill) => {
+const verifySkill = (skill) => {
   const existing = verifs[skill] || [];
 if (existing.some((e) => e.role === role)) {
   alert("This skill is already verified for this role.");
@@ -1407,15 +1398,21 @@ if (existing.some((e) => e.role === role)) {
   const updated = {
     ...verifs,
     [skill]: [...existing, { role, confidence }]
-  };
-
+  }; 
   setVerifs(updated);
   S.setStudentTokens((s) => s + STUDENT_TOKENS_PER_SKILL);
   S.addVerifierPoints(role, VERIFIER_POINTS_PER_SKILL);
 
   alert("Skill verified successfully. Reputation score updated.");
 };
-  };
+const verifyAllSkills = () => {
+  segments.forEach((seg) => {
+    verifySkill(seg.skill);
+  });
+
+  alert("Bulk skill verification completed.");
+};
+  
 
   // scoring
   const allVerifs = Object.values(verifs).flat();
@@ -1459,6 +1456,7 @@ const verificationHistory = allVerifs.map((v) => ({
       <Panel eyebrow="Agent 05 · Foreground · On-chain" title="Reputation" accent={C.green}>
         <div style={{ marginBottom: 12 }}>
           <Btn kind="rust" onClick={() => setShowLeaderboard(true)}>🏆 Leaderboard Display</Btn>
+          <Btn kind="rust" onClick={verifyAllSkills}>🔄 Verify All Skills</Btn> 
         </div>
         <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: C.inkSoft, marginTop: 0 }}>
           Stakeholders verify capabilities directly on the student's résumé. Pick your acting role, then click any
