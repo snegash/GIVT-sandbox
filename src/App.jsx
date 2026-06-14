@@ -1396,6 +1396,25 @@ function ReputationAgent({ S }) {
     setVerifs(updated);
     S.setStudentTokens((s) => s + STUDENT_TOKENS_PER_SKILL);
     S.addVerifierPoints(role, VERIFIER_POINTS_PER_SKILL);
+    alert("Skill verified successfully. Reputation score updated.");
+    const verifySkill = (skill) => {
+  const existing = verifs[skill] || [];
+if (existing.some((e) => e.role === role)) {
+  alert("This skill is already verified for this role.");
+  return;
+}
+
+  const updated = {
+    ...verifs,
+    [skill]: [...existing, { role, confidence }]
+  };
+
+  setVerifs(updated);
+  S.setStudentTokens((s) => s + STUDENT_TOKENS_PER_SKILL);
+  S.addVerifierPoints(role, VERIFIER_POINTS_PER_SKILL);
+
+  alert("Skill verified successfully. Reputation score updated.");
+};
   };
 
   // scoring
