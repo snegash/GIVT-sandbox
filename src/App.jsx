@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import * as db from "./db";
 
 /* =====================================================================
    GIVT Sandbox — Gamified, Individualized, Verified Talent
@@ -886,18 +887,14 @@ function TalentAgent({ S }) {
   const generateProfile = async (name) => {
     setLoading(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await db.callAnthropic({
           model: "claude-sonnet-4-20250514", max_tokens: 1000,
           messages: [{ role: "user", content:
             "Produce a concise company profile for \"" + name + "\" in healthcare informatics. " +
             "Use web search. Cover: overview, mission, technology/data environment, regulatory context, and current hiring signals. " +
             "Plain text, labeled sections, under 400 words." }],
           tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      const data = await res.json();
+        });
       const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
       setProfile(text || heuristicProfile(name));
     } catch (e) {
@@ -1225,6 +1222,9 @@ function AdvisorAgent({ S }) {
     S.setProfessorTokens((p) => p + PROFESSOR_TOKENS_PER_SYLLABUS);
     S.pushSupervision(i);
     S.pushLedger({ kind: "supervise", amount: PROFESSOR_TOKENS_PER_SYLLABUS, from: "Platform escrow", to: "Professor", note: "Agreed to supervise Syllabus " + (i + 1) });
+    if (S.account?.id) {
+      db.superviseSyllabus({ sessionId: S.sessionId, syllabusIndex: i, professorAccountId: S.account.id }).catch(console.error);
+    }
   };
   const awardStudent = (amount) => {
     amount = Math.round(amount);
@@ -1232,6 +1232,9 @@ function AdvisorAgent({ S }) {
     S.setProfessorTokens((p) => p - amount);
     S.setStudentTokens((s) => s + amount);
     S.pushLedger({ kind: "award", amount, from: "Professor", to: "Student", note: "Awarded " + amount + " GIVT to student" });
+    if (S.account?.id) {
+      db.awardTokens({ fromProfessorAccountId: S.account.id, toStudentAccountId: S.account.id, amount }).catch(console.error);
+    }
   };
 
   return (
@@ -1403,6 +1406,9 @@ if (existing.some((e) => e.role === role)) {
   S.setStudentTokens((s) => s + STUDENT_TOKENS_PER_SKILL);
   S.addVerifierPoints(role, VERIFIER_POINTS_PER_SKILL);
 
+  if (S.account?.id) {
+    db.verifySkill({ sessionId: S.sessionId, studentAccountId: S.account.id, skill, verifierRole: role, verifierAccountId: S.account.id, confidence, comment, hedera }).catch(console.error);
+  }
   alert("Skill verified successfully. Reputation score updated.");
 };
 const verifyAllSkills = () => {
@@ -1893,10 +1899,7 @@ function AccountModal({ S, onClose }) {
     try {
       const body = { model: "claude-sonnet-4-20250514", max_tokens: 1200, messages: [{ role: "user", content: prompt }] };
       if (useSearch) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      const data = await res.json();
+      const data = await db.callAnthropic(body);
       const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
       setGenerated(text || fallback250(src, count, role, name));
     } catch (e) {
@@ -1905,15 +1908,21 @@ function AccountModal({ S, onClose }) {
     setGen(false);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!name.trim()) return;
     const acct = { role, name: name.trim(), hedera: hedera.trim(), profile: sanitize(generated || source), createdAt: Date.now() };
-    const isNew = !existing;
+    const isNew = !existing || !existing.id;
     S.setAccount(acct);
     if (isNew) {
       S.creditRole(role, ACCOUNT_REWARD);
       S.pushLedger({ kind: "account", amount: ACCOUNT_REWARD, from: "GIVT treasury", to: role, note: "Account creation reward (" + role + ")" });
     }
+    try {
+      const saved = isNew
+        ? await db.createAccount({ role: acct.role, name: acct.name, hedera: acct.hedera, profile: acct.profile })
+        : await db.updateAccount(existing.id, { name: acct.name, hedera: acct.hedera, profile: acct.profile });
+      if (saved) { S.setAccount(saved); if (S.ensureSession) await S.ensureSession(saved.id); }
+    } catch (e) { console.error("account persist failed:", e); }
     onClose();
   };
 
@@ -2072,6 +2081,7 @@ export default function App() {
   const [tokenLedger, setTokenLedger] = useState([]);
   const [account, setAccount] = useState(null);
   const [showAccount, setShowAccount] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
 
   const creditRole = useCallback((role, amount) => {
     if (role === "Student") setStudentTokens((s) => s + amount);
@@ -2084,6 +2094,27 @@ export default function App() {
   }, []);
   const pushSupervision = useCallback((i) => setSupervision((s) => (s.includes(i) ? s : [...s, i])), []);
   const pushLedger = useCallback((e) => setTokenLedger((l) => [{ ...e, id: Date.now() + Math.random() }, ...l]), []);
+
+  // --- PostgreSQL/Supabase persistence: ensure a session + hydrate on load ---
+  const ensureSession = useCallback(async (accountId) => {
+    try { const sess = await db.getOrCreateSession(accountId ?? null); setSessionId(sess.id); return sess.id; }
+    catch (e) { console.error("session init failed:", e); return null; }
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const acct = await db.getMyAccount();
+        if (acct) {
+          setAccount(acct);
+          if (typeof acct.token_balance === "number") {
+            if (acct.role === "Student") setStudentTokens(acct.token_balance);
+            else if (acct.role === "Professor") setProfessorTokens(acct.token_balance);
+          }
+        }
+        await ensureSession(acct?.id);
+      } catch (e) { console.error("hydrate failed:", e); }
+    })();
+  }, [ensureSession]);
 
   const S = {
     globalResume, setGlobalResume, globalJD, setGlobalJD,
@@ -2098,6 +2129,7 @@ export default function App() {
     supervision, pushSupervision,
     tokenLedger, pushLedger,
     account, setAccount, showAccount, setShowAccount, creditRole,
+    sessionId, setSessionId, ensureSession,
   };
 
   // inject fonts once
