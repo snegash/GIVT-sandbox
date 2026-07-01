@@ -1,5 +1,5 @@
 // src/api.js — low-level client for the GIVT Express API (JWT in localStorage).
-const BASE = (import.meta.env.VITE_API_URL || "http://localhost:3001").replace(/\/$/, "");
+const BASE = (import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:3001" : "")).replace(/\/$/, "");
 
 let token = localStorage.getItem("givt_token") || null;
 
